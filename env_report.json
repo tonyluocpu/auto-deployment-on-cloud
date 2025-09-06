@@ -1,0 +1,36 @@
+{
+  "repo_url": "https://github.com/Arvo-AI/hello_world.git",
+  "language": "python",
+  "language_version": ">=3.7",
+  "frameworks": [
+    "flask"
+  ],
+  "package_manager": "pip",
+  "dependencies": [
+    {
+      "name": "flask",
+      "version": "2.1.3",
+      "source": "requirements"
+    },
+    {
+      "name": "werkzeug",
+      "version": "2.1.2",
+      "source": "requirements"
+    },
+    {
+      "name": "flask-cors",
+      "version": "5.0.0",
+      "source": "requirements"
+    }
+  ],
+  "dev_dependencies": [],
+  "system_packages": [],
+  "env_vars": [],
+  "start_commands": [
+    "python app.py"
+  ],
+  "ports": [
+    5000
+  ],
+  "notes": []
+}
