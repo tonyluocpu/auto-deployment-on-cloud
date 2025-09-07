@@ -16,7 +16,7 @@ variable "zone" {
 }
 
 variable "machine_type" {
-  description = "GCE machine type (e.g., e2-small, e2-standard-2)"
+  description = "GCE machine type"
   type        = string
   default     = "e2-small"
 }
@@ -34,7 +34,7 @@ variable "image" {
 }
 
 variable "app_port" {
-  description = "The port the app listens on inside the VM/container"
+  description = "Internal app port (container/native)"
   type        = number
-  default     = 5000
+  default     = 8000
 }

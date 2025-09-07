@@ -47,7 +47,13 @@ docker username
 
 python analyze_repo_env.py https://github.com/Arvo-AI/hello_world
 
-python write_tf_gcp_from_report.py --prompt "Deploy this flask application on GCP" --repo https://github.com/Arvo-AI/hello_world --report env_report.json --project cd47-proj --region us-central1 --zone us-central1-a
+python write_tf_gcp_from_report.py https://github.com/Arvo-AI/hello_world \
+  --project cd47-proj \
+  --region us-central1 \
+  --zone us-central1-a \
+  --image docker.io/cockckd/hello_world:latest
+  
 cd tf_out_hello_world
+
 terraform init
 terraform apply -auto-approve
