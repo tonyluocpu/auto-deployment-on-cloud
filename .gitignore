@@ -1,0 +1,3 @@
+# Ignore Terraform state and plugins
+.terraform/
+.terraform.lock.hcl
