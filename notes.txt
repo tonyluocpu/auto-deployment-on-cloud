@@ -1,0 +1,53 @@
+for users authetication:
+
+(base) default@MacBook-Pro-4 tf_out_hello_world % gcloud auth application-default login
+
+
+The environment variable [GOOGLE_APPLICATION_CREDENTIALS] is set to:
+  [/Users/default/.config/gcloud/application_default_credentials.json]
+Credentials will still be generated to the default location:
+  [/Users/default/.config/gcloud/application_default_credentials.json]
+To use these credentials, unset this environment variable before
+running your application.
+
+Do you want to continue (Y/n)?  y
+
+Your browser has been opened to visit:
+
+    https://accounts.google.com/o/oauth2/auth?response_type=code&client_id=764086051850-6qr4p6gpi6hn506pt8ejuq83di341hur.apps.googleusercontent.com&redirect_uri=http%3A%2F%2Flocalhost%3A8085%2F&scope=openid+https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fuserinfo.email+https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fcloud-platform+https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fsqlservice.login&state=80mq5uwcSA5Zr7euRycEsQHCjiGO4G&access_type=offline&code_challenge=ln9HzhjKkdB4r83OSOWsnyccbRhEO6PaSvyTzq7Lv4o&code_challenge_method=S256
+
+
+Credentials saved to file: [/Users/default/.config/gcloud/application_default_credentials.json]
+
+These credentials will be used by any library that requests Application Default Credentials (ADC).
+
+Quota project "cd47-proj" was added to ADC which can be used by Google client libraries for billing and quota. Note that some services may still bill the project owning the resource.
+(base) default@MacBook-Pro-4 tf_out_hello_world % gcloud services enable compute.googleapis.com --project cd47-proj
+
+
+
+
+gcloud compute ssh autodeploy-app-9503 --project=cd47-proj --zone=us-central1-a
+
+
+
+1. need to configure log in to the three domain providers! 
+
+terrafomr
+
+docker please:
+gcloud auth configure-docker
+
+sudo cat /var/log/autodeploy/startup.log
+gcloud compute ssh autodeploy-app-8307 --project=cd47-proj --zone=us-central1-a
+
+docker username
+
+
+
+python analyze_repo_env.py https://github.com/Arvo-AI/hello_world
+
+python write_tf_gcp_from_report.py --prompt "Deploy this flask application on GCP" --repo https://github.com/Arvo-AI/hello_world --report env_report.json --project cd47-proj --region us-central1 --zone us-central1-a
+cd tf_out_hello_world
+terraform init
+terraform apply -auto-approve

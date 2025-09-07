@@ -10,11 +10,18 @@ Usage:
   #   export GITHUB_TOKEN=ghp_xxx      # for private repos / higher rate limits
   #   export CHAT_PROVIDER=openai      # default: openrouter
   #   export CHAT_MODEL=gpt-4o-mini    # default for openrouter: openai/gpt-4o-mini
+
+Outputs:
+  - <reponame>_env.json                  (repo-specific copy)
+  - <reponame>.docker                    (Dockerfile content using .docker extension)
+  - TEMPORARY FOLDER for analysis with Dockerfile inside
 """
 
-import os, sys, re, json, requests, textwrap
+import os, sys, re, json, requests
 from urllib.parse import urlparse
 from pathlib import Path
+import shutil
+import subprocess
 
 # ---------------- Chat backend ----------------
 
@@ -78,7 +85,8 @@ def get_tree(owner, repo, ref=None, gh_token=None):
     headers = dict(GITHUB_HEADERS)
     if gh_token: headers["Authorization"] = f"Bearer {gh_token}"
     if ref is None:
-        ref = resolve_default_branch(owner, repo, gh_token=gh_token)
+        ref = resolve_default_branch(owner, repo, gh_token=gh_token), None
+    if isinstance(ref, tuple): ref = ref[0]
 
     # Resolve ref -> sha
     r = requests.get(f"{GITHUB_API}/repos/{owner}/{repo}/git/refs/heads/{ref}", headers=headers)
@@ -219,7 +227,7 @@ Respond ONLY with the JSON object.
 """
     raw = chat_complete(
         [
-            {"role": "system", "content": "You are a senior build & environment analyst. Output STRICT JSON only."},
+            {"role": "system", "content": "You are a meticulous environment auditor. Output STRICT JSON only."},
             {"role": "user", "content": prompt.strip()},
         ],
         provider=provider, model=model, api_key=api_key
@@ -229,8 +237,159 @@ Respond ONLY with the JSON object.
         raise ValueError("Model did not return JSON.")
     return json.loads(m.group(0))
 
+# ---------------- Dockerfile rendering ----------------
+
+def _repo_name_from_url(repo_url: str) -> str:
+    # e.g., https://github.com/Arvo-AI/hello_world(.git) -> hello_world
+    path = urlparse(repo_url).path.rstrip("/")
+    name = path.split("/")[-1]
+    return name[:-4] if name.endswith(".git") else name
+
+def _pick_python_base(language_version: str|None) -> str:
+    """
+    Map an exact or range-ish python version to a good Docker tag.
+    """
+    default = "python:3.11-slim"
+    if not isinstance(language_version, str) or not language_version.strip():
+        return default
+    v = language_version.strip().lower()
+    # exact x.y[.z]
+    m = re.match(r"^(\d+)\.(\d+)(?:\.\d+)?$", v)
+    if m:
+        major, minor = int(m.group(1)), int(m.group(2))
+        # keep minor; use slim
+        return f"python:{major}.{minor}-slim"
+    # ranges like ">=3.11", "~3.10", ">=3.8"
+    if "3.11" in v: return "python:3.11-slim"
+    if "3.10" in v: return "python:3.10-slim"
+    if "3.9"  in v: return "python:3.9-slim"
+    if "3.8"  in v: return "python:3.10-slim"  # safe modern default
+    return default
+
+def _pick_node_base(language_version: str|None) -> str:
+    default = "node:18-alpine"
+    if not isinstance(language_version, str) or not language_version.strip():
+        return default
+    v = language_version.strip().lower()
+    m = re.match(r"^(\d+)(?:\.(\d+))?(?:\.\d+)?$", v)
+    if m:
+        major = int(m.group(1))
+        if major < 14: return "node:14-alpine"
+        if major == 14: return "node:14-alpine"
+        if major == 16: return "node:16-alpine"
+        if major == 18: return "node:18-alpine"
+        if major >= 20: return "node:20-alpine"
+    if "16" in v: return "node:16-alpine"
+    if "18" in v: return "node:18-alpine"
+    if "20" in v: return "node:20-alpine"
+    return default
+
+def render_dockerfile(report: dict, files_payload: list[tuple[str, str]]) -> str:
+    """
+    Produce a Dockerfile (returned as text) that runs the application,
+    dynamically copying files based on their detected paths.
+    """
+    language = (report.get("language") or "").lower().strip()
+    lang_ver = report.get("language_version")
+    ports = report.get("ports") or []
+    port = int(ports[0]) if ports else 8000
+    start_cmds = report.get("start_commands") or []
+    start_cmd = start_cmds[0] if start_cmds else ""
+    
+    # Generate dynamic COPY commands and handle dependencies
+    copy_commands = []
+    requirements_path = next((path for path, _ in files_payload if path.endswith("requirements.txt")), None)
+    
+    # Use a more robust start command for Python apps
+    if language == "python":
+        base = _pick_python_base(lang_ver)
+        if not start_cmd:
+            start_cmd = f"gunicorn --bind 0.0.0.0:{port} 'app:app'"
+
+        # First, copy the requirements file to a known location for installation
+        if requirements_path:
+            # Docker needs to see the file in the context of the build
+            # We copy the file and then run pip from the right directory
+            copy_commands.append(f"COPY {requirements_path} requirements.txt")
+        
+        # Then, copy all other files from the repository root
+        for path, _ in files_payload:
+            if not path.endswith("requirements.txt"):
+                # Copy other files relative to their original location
+                copy_commands.append(f"COPY {path} {path}")
+
+        # Final Dockerfile content
+        dockerfile_content = f"""# syntax=docker/dockerfile:1
+FROM {base}
+
+WORKDIR /app
+
+ENV PYTHONDONTWRITEBYTECODE=1 \\
+    PYTHONUNBUFFERED=1 \\
+    PIP_NO_CACHE_DIR=1
+
+# Copy dependencies and install them
+{''.join(f'{os.linesep}{cmd}' for cmd in copy_commands if 'requirements.txt' in cmd)}
+{f'RUN pip install -r requirements.txt gunicorn' if requirements_path else ''}
+
+# Copy all application files
+{''.join(f'{os.linesep}{cmd}' for cmd in copy_commands if 'requirements.txt' not in cmd)}
+
+EXPOSE {port}
+CMD {json.dumps(start_cmd)}
+"""
+        return dockerfile_content.strip() + "\n"
+
+    # Similar dynamic logic can be added for other languages (e.g., node)
+    if language == "node":
+        base = _pick_node_base(lang_ver)
+        if not start_cmd:
+            start_cmd = "npm start"
+        
+        # Build dynamic COPY commands for all files detected
+        for path, _ in files_payload:
+            copy_commands.append(f"COPY {path} {path}")
+
+        dockerfile_content = f"""# syntax=docker/dockerfile:1
+FROM {base}
+
+WORKDIR /app
+
+ENV NODE_ENV=production
+
+# Install dependencies if package.json exists
+{f'COPY package.json .' if any('package.json' in p for p, _ in files_payload) else ''}
+{f'RUN npm ci || npm install;' if any('package.json' in p for p, _ in files_payload) else ''}
+
+# Copy application files
+{''.join(f'{os.linesep}{cmd}' for cmd in copy_commands)}
+
+EXPOSE {port}
+CMD {json.dumps(start_cmd)}
+"""
+        return dockerfile_content.strip() + "\n"
+    
+    # Generic fallback
+    dockerfile_content = f"""# syntax=docker/dockerfile:1
+FROM debian:stable-slim
+
+WORKDIR /app
+
+RUN apt-get update -y && apt-get install -y --no-install-recommends \\
+      git ca-certificates curl python3 python3-pip \\
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy all files found by the analyzer
+{''.join(f'{os.linesep}COPY {path} ./{path}' for path, _ in files_payload)}
+
+EXPOSE {port}
+CMD {json.dumps(start_cmd or "python3 app.py")}
+"""
+    return dockerfile_content.strip() + "\n"
+
 # ---------------- Runner ----------------
 
+# The main function from analyze_repo_env.py
 def main():
     if len(sys.argv) < 2:
         print("Usage: python analyze_repo_env.py <github_repo_url>")
@@ -249,31 +408,33 @@ def main():
     gh_token = os.getenv("GITHUB_TOKEN")
     if gh_token:
         print("[*] Using GitHub token for API access.")
+    
+    repo_name = _repo_name_from_url(repo_url)
+    
+    local_repo_path = Path(f"./{repo_name}_local_clone")
+    if local_repo_path.exists():
+        shutil.rmtree(local_repo_path)
+    
+    print(f"[*] Cloning repository locally to {local_repo_path}...")
+    try:
+        subprocess.run(["git", "clone", repo_url, str(local_repo_path)], check=True)
+    except subprocess.CalledProcessError:
+        print("Failed to clone repository. Check URL or GitHub token.")
+        sys.exit(1)
 
-    # Fetch tree, let LLM pick files, download them
-    print("[*] Enumerating repository...")
+    # ... The rest of the script is unchanged for analysis ...
     owner, repo, ref = parse_github_url(repo_url)
     if ref is None:
-        ref, _ = resolve_default_branch(owner, repo, gh_token=gh_token), None
+        ref = resolve_default_branch(owner, repo, gh_token=gh_token)
     ref, tree = get_tree(owner, repo, ref, gh_token=gh_token)
     all_paths = [t["path"] for t in tree if t.get("type") == "blob"]
     if not all_paths:
         print("No files found in repo tree."); sys.exit(1)
-
-    # Patch 1: detect README-like files
     likely_readmes = [p for p in all_paths if p.lower() in (
         "readme.md","readme","readme.txt","readme.rst","readme.mdown","readme.markdown"
     )]
-    if likely_readmes:
-        print("[*] README detected at:", ", ".join(likely_readmes))
-
-    print("[*] Selecting critical files via LLM...")
     critical_paths = llm_choose_critical_paths(repo_url, all_paths, provider, model, api_key)
-
-    # Patch 2: Always include README (if present) ahead of LLM picks
-    # ensure uniqueness order-preserving, then trim to budget
     critical_paths = list(dict.fromkeys(likely_readmes + critical_paths))[:MAX_FILES_TO_FETCH]
-
     files_payload = []
     for path in critical_paths:
         raw = fetch_raw(owner, repo, ref, path)
@@ -283,7 +444,6 @@ def main():
         except Exception:
             text = "[binary content omitted]"
         files_payload.append((path, text))
-
     print("\n=== Files Read ===")
     for p, _ in files_payload:
         print("-", p)
@@ -295,73 +455,42 @@ def main():
         print("Failed to generate environment report:", e)
         sys.exit(1)
 
-    # Save JSON
+    # Note: The GCR image is no longer used, so this part is removed.
+    
+    # OLD: docker_txt = render_dockerfile(report)
+    # NEW: render_dockerfile(report, files_payload)
+    docker_txt = render_dockerfile(report, files_payload)
+    (local_repo_path / "Dockerfile").write_text(docker_txt)
+    
+    print(f"\n[*] Building Docker image locally from {local_repo_path}...")
+    try:
+        subprocess.run(["docker", "build", "-t", f"{repo_name}:latest", str(local_repo_path)], check=True)
+    except subprocess.CalledProcessError as e:
+        print(f"Docker build failed: {e}")
+        sys.exit(1)
+        
+    # NEW: Define a public image name. Replace `your_docker_hub_username` with your username.
+    public_image = f"cockckd/{repo_name}:latest"
+    print(f"[*] Tagging image as {public_image}...")
+    subprocess.run(["docker", "tag", f"{repo_name}:latest", public_image], check=True)
+    
+    print(f"[*] Pushing image to public Docker Hub...")
+    try:
+        subprocess.run(["docker", "push", public_image], check=True)
+        print("\n[✓] Image pushed successfully. Ready for deployment.")
+    except subprocess.CalledProcessError as e:
+        print(f"Docker push failed. Make sure you are authenticated to Docker Hub: `docker login`")
+        sys.exit(1)
+        
+    # Add the public image to the report
+    report['public_image'] = public_image
+
+    # Save JSON report
     Path("env_report.json").write_text(json.dumps(report, indent=2))
-    print('\nSaved full JSON to: env_report.json')
-
-    # Pretty print essentials
-    def _fmt_deps(items):
-        out = []
-        for d in items or []:
-            name = d.get("name")
-            ver = d.get("version")
-            src = d.get("source")
-            if name:
-                if ver: out.append(f"{name}=={ver}  ({src})")
-                else:   out.append(f"{name}  ({src})")
-        return out
-
-    print("\n=== Environment Summary ===")
-    print("Repo:            ", report.get("repo_url") or repo_url)
-    print("Language:        ", report.get("language"))
-    print("Language version:", report.get("language_version"))  # may be an inferred range like ">=3.11"
-    print("Frameworks:      ", ", ".join(report.get("frameworks") or []) or "-")
-    print("Package manager: ", report.get("package_manager") or "-")
-
-    deps = _fmt_deps(report.get("dependencies"))
-    dev_deps = _fmt_deps(report.get("dev_dependencies"))
-    if deps:
-        print("\nDependencies:")
-        for line in deps: print("  -", line)
-    else:
-        print("\nDependencies:    -")
-
-    if dev_deps:
-        print("\nDev Dependencies:")
-        for line in dev_deps: print("  -", line)
-
-    sys_pkgs = report.get("system_packages") or []
-    if sys_pkgs:
-        print("\nSystem packages:")
-        for p in sys_pkgs: print("  -", p)
-
-    envs = report.get("env_vars") or []
-    if envs:
-        print("\nEnvironment variables:")
-        for e in envs:
-            name = e.get("name")
-            req = "required" if e.get("required") else "optional"
-            default = e.get("default")
-            desc = e.get("description") or ""
-            default_s = default if isinstance(default, str) else "-"
-            print(f"  - {name} [{req}] default={default_s} {('- ' + desc) if desc else ''}")
-    else:
-        print("\nEnvironment variables: -")
-
-    starts = report.get("start_commands") or []
-    if starts:
-        print("\nStart commands:")
-        for s in starts: print("  -", s)
-
-    ports = report.get("ports") or []
-    print("\nPorts:           ", ", ".join(str(p) for p in ports) if ports else "-")
-
-    notes = report.get("notes") or []
-    if notes:
-        print("\nNotes:")
-        for n in notes: print("  -", n)
-
+    env_path = f"{repo_name}_env.json"
+    Path(env_path).write_text(json.dumps(report, indent=2))
+        
     print("\nDone.")
-    # End.
+
 if __name__ == "__main__":
     main()
