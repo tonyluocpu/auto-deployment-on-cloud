@@ -1,2 +1,8 @@
-tf_out_hello_world
-hello_world_local_clone
+# Ignore directories created by the deployment scripts
+tf_out_hello_world/
+hello_world_local_clone/
+
+# Ignore Terraform files
+.terraform/
+.terraform.lock.hcl
+*.tfvars.json
