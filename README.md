@@ -69,6 +69,7 @@ auto-deployment-on-cloud/
 ├── README.md
 ├── autodeploy_aws.py
 ├── autodeploy_chat_azure_gcp.py
+|-- requirements.txt
 ```
 
 ---
