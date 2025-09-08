@@ -1,40 +1,38 @@
-variable "project" {
-  description = "GCP project ID"
+variable "subscription_id" {
+  description = "Azure Subscription ID"
   type        = string
 }
 
-variable "region" {
-  description = "GCP region"
+variable "location" {
+  description = "Azure location/region"
   type        = string
-  default     = "us-central1"
+  default     = "eastus"
 }
 
-variable "zone" {
-  description = "GCP zone"
+variable "rg_name" {
+  description = "Resource Group name"
   type        = string
-  default     = "us-central1-a"
+  default     = "autodeploy-rg"
 }
 
-variable "machine_type" {
-  description = "GCE machine type"
+variable "vm_size" {
+  description = "Azure VM size"
   type        = string
-  default     = "e2-small"
+  default     = "Standard_B2s"
 }
 
-variable "disk_size_gb" {
-  description = "Boot disk size in GB"
-  type        = number
-  default     = 30
+variable "admin_username" {
+  description = "Admin username for the VM"
+  type        = string
+  default     = "azureuser"
 }
 
-variable "image" {
-  description = "Boot image (project/family or project/image)"
+variable "ssh_public_key" {
+  description = "SSH public key for the admin user"
   type        = string
-  default     = "ubuntu-os-cloud/ubuntu-2204-lts"
 }
 
 variable "app_port" {
-  description = "Internal app port (container/native)"
+  description = "Application port"
   type        = number
-  default     = 8000
 }

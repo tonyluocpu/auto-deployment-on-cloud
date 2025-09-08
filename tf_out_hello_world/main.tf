@@ -1,84 +1,138 @@
 terraform {
-  required_version = ">= 1.3.0"
   required_providers {
-    google = {
-      source  = "hashicorp/google"
-      version = ">= 5.0"
-    }
-    random = {
-      source  = "hashicorp/random"
-      version = ">= 3.5"
+    azurerm = {
+      source  = "hashicorp/azurerm"
+      version = ">= 3.100.0"
     }
   }
 }
 
-provider "google" {
-  project = var.project
-  region  = var.region
-  zone    = var.zone
+provider "azurerm" {
+  features {}
+  subscription_id = var.subscription_id
 }
 
-resource "random_id" "suffix" {
-  byte_length = 2
+resource "azurerm_resource_group" "rg" {
+  name     = var.rg_name
+  location = var.location
 }
 
-locals {
-  app_name      = "autodeploy-app-${random_id.suffix.hex}"
-  firewall_http = "autodeploy-allow-http-${random_id.suffix.hex}"
-  firewall_app  = "autodeploy-allow-app-${random_id.suffix.hex}"
+resource "azurerm_virtual_network" "vnet" {
+  name                = "autodeploy-vnet"
+  location            = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
+  address_space       = ["10.0.0.0/16"]
 }
 
-# Allow HTTP/80 for the container/native app
-resource "google_compute_firewall" "http" {
-  name    = local.firewall_http
-  network = "default"
-  allow {
-    protocol = "tcp"
-    ports    = ["80"]
-  }
-  source_ranges = ["0.0.0.0/0"]
-  target_tags   = ["http-server"]
+resource "azurerm_subnet" "subnet" {
+  name                 = "autodeploy-subnet"
+  resource_group_name  = azurerm_resource_group.rg.name
+  virtual_network_name = azurerm_virtual_network.vnet.name
+  address_prefixes     = ["10.0.1.0/24"]
 }
 
-# Also allow the internal app port for debugging (optional)
-resource "google_compute_firewall" "app" {
-  name    = local.firewall_app
-  network = "default"
-  allow {
-    protocol = "tcp"
-    ports    = [tostring(var.app_port)]
+resource "azurerm_network_security_group" "nsg" {
+  name                = "autodeploy-nsg"
+  location            = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
+
+  security_rule {
+    name                       = "allow-ssh"
+    priority                   = 1000
+    direction                  = "Inbound"
+    access                     = "Allow"
+    protocol                   = "Tcp"
+    source_port_range          = "*"
+    destination_port_range     = "22"
+    source_address_prefix      = "*"
+    destination_address_prefix = "*"
   }
-  source_ranges = ["0.0.0.0/0"]
-  target_tags   = ["http-server"]
+
+  security_rule {
+    name                       = "allow-http"
+    priority                   = 1001
+    direction                  = "Inbound"
+    access                     = "Allow"
+    protocol                   = "Tcp"
+    source_port_range          = "*"
+    destination_port_range     = "80"
+    source_address_prefix      = "*"
+    destination_address_prefix = "*"
+  }
+
+  security_rule {
+    name                       = "allow-app"
+    priority                   = 1002
+    direction                  = "Inbound"
+    access                     = "Allow"
+    protocol                   = "Tcp"
+    source_port_range          = "*"
+    destination_port_range     = tostring(var.app_port)
+    source_address_prefix      = "*"
+    destination_address_prefix = "*"
+  }
 }
 
-resource "google_compute_instance" "app" {
-  name         = local.app_name
-  machine_type = var.machine_type
-  zone         = var.zone
+resource "azurerm_public_ip" "app_pip" {
+  name                = "autodeploy-pip"
+  location            = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
+  allocation_method   = "Static"
+  sku                 = "Standard"
+}
 
-  boot_disk {
-    initialize_params {
-      image = var.image
-      size  = var.disk_size_gb
-    }
+resource "azurerm_network_interface" "nic" {
+  name                = "autodeploy-nic"
+  location            = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
+
+  ip_configuration {
+    name                          = "internal"
+    subnet_id                     = azurerm_subnet.subnet.id
+    private_ip_address_allocation = "Dynamic"
+    public_ip_address_id          = azurerm_public_ip.app_pip.id
   }
+}
 
-  network_interface {
-    network = "default"
-    access_config {}
-  }
+resource "azurerm_network_interface_security_group_association" "nic_nsg" {
+  network_interface_id      = azurerm_network_interface.nic.id
+  network_security_group_id = azurerm_network_security_group.nsg.id
+}
 
-  tags = ["http-server"]
+resource "azurerm_linux_virtual_machine" "app_vm" {
+  name                = "autodeploy-vm"
+  location            = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
+  size                = var.vm_size
+  admin_username      = var.admin_username
 
-  metadata_startup_script = file("startup.sh")
-
-  service_account {
-    scopes = ["https://www.googleapis.com/auth/cloud-platform"]
-  }
-
-  depends_on = [
-    google_compute_firewall.http,
-    google_compute_firewall.app
+  network_interface_ids = [
+    azurerm_network_interface.nic.id
   ]
+
+  os_disk {
+    caching              = "ReadWrite"
+    storage_account_type = "Standard_LRS"
+  }
+
+  # Ubuntu 22.04 LTS Gen2
+  source_image_reference {
+    publisher = "Canonical"
+    offer     = "0001-com-ubuntu-server-jammy"
+    sku       = "22_04-lts-gen2"
+    version   = "latest"
+  }
+
+  disable_password_authentication = true
+  admin_ssh_key {
+    username   = var.admin_username
+    public_key = var.ssh_public_key
+  }
+
+  # Inject our startup.sh (cloud-init)
+  custom_data = filebase64("startup.sh")
+}
+
+output "public_ip" {
+  value = azurerm_public_ip.app_pip.ip_address
 }
