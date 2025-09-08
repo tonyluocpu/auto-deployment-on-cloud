@@ -21,6 +21,8 @@ import requests
 from pathlib import Path
 from urllib.parse import urlparse
 
+os.environ['OPENROUTER_API_KEY'] = ''
+os.environ["GCP_BILLING_ACCOUNT_ID"] = ''
 
 # ---------------- Provider-agnostic chat helper ----------------
 def chat_complete(messages, model=None, provider=None, timeout=60):

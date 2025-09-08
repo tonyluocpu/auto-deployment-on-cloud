@@ -63,15 +63,12 @@ If no key is found, deployment may fail or prompt for one.
 ## 📁 Project Structure
 
 ```plaintext
-autodeploy_chat_system/
-├── autodeploy_chat.py           # Main deployment orchestration script
-├── README.md                    # This documentation file                       # (Optional) File for storing environment variables
-└── tf_out_<repo_name>/          # Auto-generated output for each deployment
-    ├── main.tf                  # Terraform config for cloud resources
-    ├── variables.tf             # Variable definitions for Terraform
-    ├── terraform.tfvars.json    # Values passed to Terraform variables
-    ├── startup.sh               # Cloud-init script run during VM launch
-    └── .terraform/              # Terraform internal metadata
+auto-deployment-on-cloud/
+├── tf_out_hello_world/ (names generated based on our example)
+├── .gitignore
+├── README.md
+├── autodeploy_aws.py
+├── autodeploy_chat_azure_gcp.py
 ```
 
 ---
@@ -81,7 +78,7 @@ autodeploy_chat_system/
 Start the deployment process by running:
 
 ```bash
-$ python autodeploy_chat.py
+$ python autodeploy_aws.py
 ```
 
 You will be prompted to enter a description and GitHub repo URL:
@@ -116,19 +113,19 @@ $ terraform destroy -auto-approve
 
 ```python
 os.environ['OPENROUTER_API_KEY'] = 'your_openrouter_api_key'  # https://openrouter.ai
-os.environ['GCP_BILLING_ACCOUNT_ID'] = 'your_gcp_billing_account_id'  # Found in GCP Billing Dashboard
+os.environ['GCP_BILLING_ACCOUNT_ID'] = 'your_gcp_billing_account_id'  # Found in GCP Billing Dashboard, for creating new project if quota limit not reached
 ```
 
-Or set them securely in your terminal before running the script:
-
-```bash
-export OPENROUTER_API_KEY='your_openrouter_api_key'
-export GCP_BILLING_ACCOUNT_ID='your_gcp_billing_account_id'
-```
 
 ---
 
-### 🔐 Cloud Provider Setup
+### 🔐 Cloud Provider Setup (MUST BE DONE PRIOR TO RUNNING THE PROGRAM)
+
+#### GCP
+
+```bash
+gcloud auth application-default login
+```
 
 #### Azure
 
@@ -152,7 +149,7 @@ You’ll be prompted for:
 AWS Access Key ID: <your_access_key>
 AWS Secret Access Key: <your_secret_key>
 Default region name [us-east-1]: (press enter to accept default)
-Default output format [json]: (press enter to accept default)
+Default output format [json]: (press enter to accept default, but text is better)
 ```
 
 ---
@@ -179,13 +176,8 @@ Default output format [json]: (press enter to accept default)
 ---
 
 ## 📚 Documentation
-
-> Full documentation is coming soon.
-
-In the meantime, refer to:
-- Inline comments in `autodeploy_chat.py`
+- Inline comments in `autodeploy_aws.py`
 - Generated Terraform files (`main.tf`, `startup.sh`, etc.)
-
 ---
 
 ## 🧪 Examples
@@ -194,7 +186,7 @@ In the meantime, refer to:
 
 ```bash
 $ python autodeploy_aws.py
-# Describe your deployment: Deploy my Flask app on GCP
+# Describe your deployment: Deploy my Flask app on AWS
 # GitHub repo URL: https://github.com/Arvo-AI/hello_world
 ```
 
@@ -216,8 +208,4 @@ $ python autodeploy_chat_azure_gcp.py
 - **LLM fails to parse intent**: Be specific and include only one cloud provider (AWS, GCP, or Azure).
 - **Missing dependencies**: Reinstall required packages and ensure CLI tools are in your system `PATH`.
 
----
 
-## 📄 License
-
-This project is licensed under the MIT License.
